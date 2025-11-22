@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Upload Document</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:#f6f8fa; padding:24px; }
+.card { max-width:720px; margin:24px auto; background:#fff; border-radius:8px; box-shadow:0 6px 24px rgba(0,0,0,0.06); padding:20px; }
+h1 { margin:0 0 12px 0; font-size:20px; }
+.drop { border:2px dashed #d1d5db; border-radius:8px; padding:28px; text-align:center; color:#374151; cursor:pointer; }
+.drop.dragover { border-color:#2563eb; background:#f0f8ff; }
+.actions { margin-top:12px; display:flex; gap:8px; align-items:center; }
+button { padding:8px 12px; border-radius:6px; border:0; background:#2563eb; color:white; cursor:pointer; }
+button:disabled { opacity:.6; cursor:not-allowed; }
+.muted { color:#6b7280; font-size:13px; }
+.preview { margin-top:16px; }
+img.preview-img { max-width:100%; border-radius:6px; }
+pre { background:#111827; color:#f9fafb; padding:12px; border-radius:6px; overflow:auto; max-height:220px; }
+.resp { margin-top:12px; padding:12px; background:#eef2ff; border-radius:6px; color:#1e293b; word-break:break-all; }
+.error { background:#fee2e2; color:#991b1b; }
+input[type="file"] { display:none; }
+</style>
+</head>
+<body>
+<div class="card">
+<h1>Upload Document to /process-document</h1>
+<div id="drop" class="drop">
+Drag & drop a PNG, JPG, PDF or TXT here — or click to choose a file
+<div class="muted" style="margin-top:8px">Accepted types: .png .jpg .jpeg .pdf .txt</div>
+</div>
+
+<div class="actions">
+<label for="fileInput" style="cursor:pointer;">
+<button id="chooseBtn" type="button">Choose file</button>
+</label>
+<button id="uploadBtn" disabled>Upload</button>
+<div id="status" class="muted">No file selected</div>
+</div>
+
+<input id="fileInput" type="file" accept=".png,.jpg,.jpeg,.pdf,.txt" />
+
+<div class="preview" id="preview"></div>
+<div id="response" class="resp" style="display:none"></div>
+</div>
+
+<script>
+(function () {
+const drop = document.getElementById('drop');
+const fileInput = document.getElementById('fileInput');
+const uploadBtn = document.getElementById('uploadBtn');
+const statusEl = document.getElementById('status');
+const preview = document.getElementById('preview');
+const responseBox = document.getElementById('response');
+
+let currentFile = null;
+const endpoint = 'http://localhost:8000/process-document';
+
+function setStatus(txt) { statusEl.textContent = txt; }
+
+function clearPreview() {
+    preview.innerHTML = '';
+    responseBox.style.display = 'none';
+}
+
+function renderPreview(file) {
+    clearPreview();
+    const type = file.type || '';
+    if (type.startsWith('image/')) {
+        const img = document.createElement('img');
+        img.className = 'preview-img';
+        img.alt = file.name;
+        img.src = URL.createObjectURL(file);
+        preview.appendChild(img);
+    } else if (file.name.toLowerCase().endsWith('.txt')) {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const pre = document.createElement('pre');
+            pre.textContent = reader.result.slice(0,2000);
+            preview.appendChild(pre);
+        };
+        reader.readAsText(file);
+    } else if (file.name.toLowerCase().endsWith('.pdf')) {
+        const p = document.createElement('div');
+        p.className = 'muted';
+        p.textContent = 'PDF ready to upload: ' + file.name;
+        preview.appendChild(p);
+    } else {
+        const p = document.createElement('div');
+        p.className = 'muted';
+        p.textContent = 'File ready to upload: ' + file.name;
+        preview.appendChild(p);
+    }
+}
+
+function handleFilePicked(f) {
+    if (!f) return;
+    const allowed = ['image/png','image/jpeg','application/pdf','text/plain'];
+    const extAllowed = ['.png','.jpg','.jpeg','.pdf','.txt'];
+    const name = (f.name || '').toLowerCase();
+
+    if (!allowed.includes(f.type) && !extAllowed.some(ext => name.endsWith(ext))) {
+        showResponse('File type not allowed. Use png, jpg, pdf or txt.', true);
+        return;
+    }
+
+    currentFile = f;
+    uploadBtn.disabled = false;
+    setStatus(`Selected: ${f.name} (${Math.round(f.size/1024)} KB)`);
+    renderPreview(f);
+}
+
+// Drag & drop
+drop.addEventListener('click', () => fileInput.click());
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('dragover'); });
+drop.addEventListener('dragleave', e => drop.classList.remove('dragover'));
+drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('dragover'); handleFilePicked(e.dataTransfer.files[0]); });
+
+fileInput.addEventListener('change', e => handleFilePicked(e.target.files[0]));
+
+// Upload
+uploadBtn.addEventListener('click', async () => {
+    if (!currentFile) {
+        showResponse('No file selected', true);
+        return;
+    }
+
+    uploadBtn.disabled = true;
+    setStatus('Uploading...');
+    responseBox.style.display = 'none';
+
+    const formData = new FormData();
+    formData.append('file', currentFile); // Backend must accept 'file'
+
+    try {
+        const res = await fetch(endpoint, { method:'POST', body: formData });
+        console.log("Response object:", res);
+
+        const contentType = res.headers.get('Content-Type') || '';
+        let data;
+        if (contentType.includes('application/json')) data = await res.json();
+        else data = await res.text();
+
+        console.log("Response data:", data);
+
+        if (!res.ok) showResponse({status: res.status, body: data}, true);
+        else showResponse(data, false);
+
+        setStatus(res.ok ? 'Upload successful' : 'Upload failed');
+
+    } catch(err) {
+        console.error(err);
+        showResponse('Network or CORS error: ' + err.message, true);
+        setStatus('Upload error');
+    } finally {
+        uploadBtn.disabled = false;
+    }
+});
+
+function showResponse(obj, isError=false) {
+    responseBox.style.display = 'block';
+    responseBox.className = isError ? 'resp error' : 'resp';
+    responseBox.innerHTML = '';
+
+    if (typeof obj === 'string') {
+        responseBox.textContent = obj;
+        return;
+    }
+
+    if (obj.status) {
+        const statusP = document.createElement('p');
+        statusP.innerHTML = `<strong>Status:</strong> ${obj.status}`;
+        responseBox.appendChild(statusP);
+    }
+
+    if (obj.extracted_text) {
+        const pre = document.createElement('pre');
+        pre.textContent = obj.extracted_text;
+        responseBox.appendChild(pre);
+    }
+
+    if (obj.deadlines && Array.isArray(obj.deadlines)) {
+        const dlList = document.createElement('ul');
+        obj.deadlines.forEach(d => {
+            const li = document.createElement('li');
+            li.innerHTML = `<strong>${d.event_type}</strong> - ${d.text} - <a href="${d.calendar_link}" target="_blank">View in Calendar</a>`;
+            dlList.appendChild(li);
+        });
+        responseBox.appendChild(dlList);
+    }
+}
+
+setStatus('No file selected');
+})();
+</script>
+</body>
+</html>
